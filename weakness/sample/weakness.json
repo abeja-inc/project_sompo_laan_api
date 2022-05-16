@@ -1,0 +1,45 @@
+{
+ "timestamp": "1478444410001",
+ "recommend_type": "weakness",
+ "personal": {
+    "id": 1
+  },
+  "articles": [
+    {
+      "priority": 1,
+      "id": 1,
+      "title": "なぜ面接評価はアテにならない? 離職率をはじき出すAIがすごい(1/2 ページ) - ITmedia ビジネスオンライン",
+      "url": "https://www.itmedia.co.jp/business/articles/2102/05/news029.html",
+      "uri": "https://image.itmedia.co.jp/business/articles/2102/05/cover_news029.jpg"
+    },
+    {
+      "priority": 2,
+      "id": 2,
+      "title": "数秒のサンプルで動画から「うずくまる」「倒れ込む」動きを検出 NECがAI活用の新技術 - ITmedia NEWS",
+      "url": "https://www.itmedia.co.jp/news/articles/2104/05/news092.html",
+      "uri": "https://image.itmedia.co.jp/news/articles/2104/05/cover_news092.jpg"
+    },
+    {
+      "priority": 3,
+      "id": 3,
+      "title": "世界に遅れる日本企業のDX 打開のカギは? AI研究者の東大・松尾教授が語る - ITmedia NEWS",
+      "url": "https://www.itmedia.co.jp/news/articles/2104/15/news118.html",
+      "uri": "https://image.itmedia.co.jp/news/articles/2104/15/cover_news118.jpg"
+    },
+    {
+      "priority": 4,
+      "id": 4,
+      "title": "AIは歌手の敵か味方か AIシンガー開発者が語る未来 分身がいることが武器になる社会へ",
+      "url": "https://www.itmedia.co.jp/news/articles/2101/29/news073.html",
+      "uri": "https://image.itmedia.co.jp/news/articles/2101/29/cover_news073.jpg"
+    }
+    ,
+    {
+      "priority": 5,
+      "id": 5,
+      "title": "AI利用を後押しする新たな取り組み その一方で生まれるブラック・ギグワーク",
+      "url": "https://www.itmedia.co.jp/news/articles/2102/28/news021.html",
+      "uri": "https://image.itmedia.co.jp/news/articles/2102/28/cover_news021.png"
+    }
+  ]
+}
