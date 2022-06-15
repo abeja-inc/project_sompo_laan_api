@@ -6,6 +6,7 @@ import time
 import json
 import os
 import traceback
+import requests
 
 # 出力ディレクトリの作成
 # ABEJA_TRAINING_RESULT_DIRという環境変数に出力先ディレクトリが設定される
@@ -17,41 +18,48 @@ INPUT_CHANNEL_ID = os.getenv('INPUT_CHANNEL_ID', 0)
 OUTPUT_CHANNEL_ID = os.getenv('OUTPUT_CHANNEL_ID', 0)
 INTEREST_COEFFICIENT = os.getenv('INTEREST_COEFFICIENT', 1)
 WEAKNESS_COEFFICIENT = os.getenv('WEAKNESS_COEFFICIENT', 1)
+WEB_HOOK_URL = os.getenv('WEB_HOOK_URL', '')
+
+#処理IDの取得
+TIMESTAMP = int(time.time() * 1000)
+
 
 def handler(context):
     print('Start train handler.')
     print(ABEJA_TRAINING_RESULT_DIR)
     try:
-        #処理IDの取得
-        timestamp = int(time.time() * 1000)
 
         #マスタファイルの読み込み
-        df_user, df_article, df_keyword, df_role, df_skill, df_level = input_datalake_master(INPUT_CHANNEL_ID)
+        df_user, df_article, df_keyword, df_role, df_skill, df_level = input_datalake_master()
 
         #interestデータ作成
         user_vec = usertovec(df_user, df_keyword, df_role, df_skill, df_level, INTEREST_COEFFICIENT, WEAKNESS_COEFFICIENT)
         article_vec = articletovec(df_article, df_keyword, df_role, df_skill, df_level, 1, 1)
+        #内積処理
         interest = calculation_dot(user_vec, article_vec)
 
         #weaknessデータ作成
         user_vec = usertovec(df_user, df_keyword, df_role, df_skill, df_level, WEAKNESS_COEFFICIENT, INTEREST_COEFFICIENT)
+        #内積処理
         weakness = calculation_dot(user_vec, article_vec)
 
         #rankingデータ生成
         ranking = make_ranking(df_user, df_article)
 
         #ファイル出力
-        output_file(OUTPUT_CHANNEL_ID, {'interest':interest, 'weakness':weakness, 'ranking':ranking}, timestamp)
+        output_file({'interest':interest, 'weakness':weakness, 'ranking':ranking})
+        post_slack('process_id:' + str(TIMESTAMP) + '\nresult:Success')
         print('End train handler.')
     except Exception as e:
         print(str(e))
         print(traceback.format_exc())
+        post_slack('process_id:' + str(TIMESTAMP) + '\nresult:Failure' + '\nerror:' + str(e))
         raise e
 
 #データレイクからマスタファイルの読み込み
-def input_datalake_master(channel_id):
+def input_datalake_master():
     datalake_client = DatalakeClient()
-    channel = datalake_client.get_channel(channel_id)
+    channel = datalake_client.get_channel(INPUT_CHANNEL_ID)
     files = channel.list_files()
     for i, f in enumerate(files):
         file_item = channel.get_file(f.file_id)
@@ -75,11 +83,11 @@ def get_article(id, content):
     return content[content["id"] == id]
 
 #ファイル出力
-def output_file(channel_id, obj, process_id):
+def output_file(obj):
     for k, v in obj.items():
-        metadata = { 'filename': str(process_id) + '_' + k + '.json' }
-        d  = {'timestamp':process_id, 'recommend_type':k, 'result':v}
-        output_datalake(channel_id, d, metadata)
+        metadata = { 'filename': str(TIMESTAMP) + '_' + k + '.json' }
+        d  = {'timestamp':TIMESTAMP, 'recommend_type':k, 'result':v}
+        output_datalake(d, metadata)
         output_dir(k, v)
 
 #ディレクトリへの出力
@@ -88,9 +96,9 @@ def output_dir(recommend_type, obj):
         json.dump(obj, f, default=expireEncoda, ensure_ascii=False)
 
 #指定のデータレイクチャンネルへのファイル出力
-def output_datalake(channel_id, object, metadata):
+def output_datalake(object, metadata):
     datalake_client = DatalakeClient()
-    channel = datalake_client.get_channel(channel_id)
+    channel = datalake_client.get_channel(OUTPUT_CHANNEL_ID)
     channel.upload(json.dumps(object, default=expireEncoda, ensure_ascii=False).encode("utf-8"), metadata=metadata, content_type='application/json')
 
 #オブジェクトのエンコード
@@ -183,6 +191,12 @@ def make_ranking(user, article):
             priority = priority + 1
         data.append({'personal': { 'id': u.id },'articles':ret})
     return data
+
+#処理結果のSlack通知
+def post_slack(message):
+    requests.post(WEB_HOOK_URL, data = json.dumps({
+        'text': message,  #通知内容
+    }))
 
 
 if __name__ == '__main__':
