@@ -10,13 +10,15 @@ JOB_DEFINITION_ID = os.getenv('JOB_DEFINITION_ID', '')
 JOB_DEFINITION_NAME = os.getenv('JOB_DEFINITION_NAME', '')
 JOB_DEFINITION_VERSION = os.getenv('JOB_DEFINITION_VERSION', 0)
 WEB_HOOK_URL = os.getenv('WEB_HOOK_URL', '')
+OUTPUT_RECORDE_SIZE = os.getenv('OUTPUT_RECORDE_SIZE', 10)
 
 def handler(request, ctx):
 
     try:
 
         api_client = APIClient()
-        response = api_client.create_training_job(JOB_DEFINITION_ID,JOB_DEFINITION_NAME,JOB_DEFINITION_VERSION,None,None)
+        user_parameters = {'OUTPUT_RECORDE_SIZE': OUTPUT_RECORDE_SIZE}
+        response = api_client.create_training_job(JOB_DEFINITION_ID,JOB_DEFINITION_NAME,JOB_DEFINITION_VERSION,user_parameters,None)
 
         post_slack('trigger_start:'+ JOB_DEFINITION_NAME + '\ntraining_job_id:' + response['training_job_id'])
 
