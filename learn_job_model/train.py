@@ -142,9 +142,9 @@ def usertovec(user, keyword, role, skill, level, interest_coefficient, weakness_
         #ベクトル作成
         result = np.where(keyword["title"].isin(user_interest), 1*interest_coefficient, 1)
         result = np.append(result,np.where(skill["title"].isin(user_skill1), 1*weakness_coefficient, 1))
-        result = np.append(result,np.where(role["title"].isin(user_role), 1, 1))
+        result = np.append(result,np.where(role["title"].isin(user_role), 1, 0))
         result = np.append(result,np.where(skill["title"].isin(user_skill2), 1*weakness_coefficient, 1))
-        result = np.append(result,np.where(level["title"].isin(user_level), 1, 1))
+        result = np.append(result,np.where(level["title"].isin(user_level), 1, 0))
         dict_obj = {'id':data.id, 'vec':result.tolist()}
         user_vec['result'].append(dict_obj)
     return user_vec
