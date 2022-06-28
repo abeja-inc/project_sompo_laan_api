@@ -17,22 +17,23 @@ import collections
 ABEJA_TRAINING_RESULT_DIR = os.getenv('ABEJA_TRAINING_RESULT_DIR', '.')
 os.makedirs(ABEJA_TRAINING_RESULT_DIR, exist_ok=True)
 
-#処理当日日付を取得(JST)
-t_delta = datetime.timedelta(hours=9)
-jst = datetime.timezone(t_delta, 'JST') 
-TODAY = datetime.datetime.now(jst) 
-
 #環境変数の取り込み
 INPUT_CHANNEL_ID = os.getenv('INPUT_CHANNEL_ID', 0)
 OUTPUT_CHANNEL_ID = os.getenv('OUTPUT_CHANNEL_ID', 0)
 INTEREST_COEFFICIENT = os.getenv('INTEREST_COEFFICIENT', 1)
 WEAKNESS_COEFFICIENT = os.getenv('WEAKNESS_COEFFICIENT', 1)
 WEB_HOOK_URL = os.getenv('WEB_HOOK_URL', '')
-OUTPUT_RECORDE_SIZE = int(os.getenv('OUTPUT_RECORDE_SIZE', 10))
+OUTPUT_RECORDE_SIZE = int(os.getenv('OUTPUT_RECORDE_SIZE', 20))
 ACTIVEDATA_CHANNEL_ID = os.getenv('ACTIVEDATA_CHANNEL_ID', 0)
-TARGET_DATE_DIFF = int(os.getenv('TARGET_DATE_DIFF', 7))
+TARGET_DATE = int(os.getenv('TARGET_DATE_DIFF', 0))
+TARGET_DATE_DIFF = int(os.getenv('TARGET_DATE_DIFF', 14))
 LATEST_MAX_COEFFICIENT = int(os.getenv('LATEST_MAX_COEFFICIENT', 5))
 LATEST_MIN_COEFFICIENT = int(os.getenv('LATEST_MIN_COEFFICIENT', 1))
+
+#処理当日日付を取得(JST)
+t_delta = datetime.timedelta(hours=9)
+jst = datetime.timezone(t_delta, 'JST')
+TODAY = datetime.datetime.now(jst) + datetime.timedelta(days=TARGET_DATE)
 
 #処理IDの取得
 TIMESTAMP = int(time.time() * 1000)
@@ -212,39 +213,36 @@ def make_ranking(user, article, t, x):
         click_cnt = []
         review_data = []
 
-        #処理当日日付を取得(JST)
-        t_delta = datetime.timedelta(hours=9)
-        jst = datetime.timezone(t_delta, 'JST')
-
         #アクティブデータの取得
         datalake_client = DatalakeClient()
         channel = datalake_client.get_channel(ACTIVEDATA_CHANNEL_ID)
-        files = channel.list_files(sort='-uploaded_at')
+        #対象日付クエリパラメータ作成
+        target_date = TODAY + datetime.timedelta(days=-TARGET_DATE_DIFF)
+        _query = 'x-abeja-meta-timestamp:>=' + target_date.strftime('%Y-%m-%d') + ' AND x-abeja-meta-timestamp:<=' + TODAY.strftime('%Y-%m-%dT%H:%M:%S')
+        files = channel.list_files(sort='-uploaded_at',query=_query)
 
         for i, f in enumerate(files):
             file_item = channel.get_file(f.file_id)
             upload_day = dateutil.parser.parse(file_item.metadata['timestamp'])
 
-            #ランキング対象データの日付判定
-            if TARGET_DATE_DIFF >= (TODAY.date()- upload_day.date()).days:
-                #zipファイルの解凍
-                with zipfile.ZipFile(io.BytesIO(file_item.get_content())) as myzip:
-                    fl = myzip.namelist()
-                    idx = t.index(upload_day.date())
-                    coefficient = x[idx]
-                    for f in fl:
-                        with myzip.open(f) as myfile:
-                            if 'ClickData' in f:
-                                data = pd.read_csv(myfile, encoding='utf-8', header=0)
-                                #ID毎のクリック回数を集計
-                                cnt = collections.Counter(data['article_id'].tolist())
-                                #集計値に日付係数をかける
-                                click_cnt.append(collections.Counter(list(cnt.elements()) * int(coefficient)))
-                            elif 'ReviewData' in f:
-                                data = pd.read_csv(myfile, encoding='utf-8', header=0)
-                                #満足度を取得
-                                if len(data) > 0:
-                                    review_data.append(data[['article_id','satisfaction']])
+            #zipファイルの解凍
+            with zipfile.ZipFile(io.BytesIO(file_item.get_content())) as myzip:
+                fl = myzip.namelist()
+                idx = t.index(upload_day.date())
+                coefficient = x[idx]
+                for f in fl:
+                    with myzip.open(f) as myfile:
+                        if 'ClickData' in f:
+                            data = pd.read_csv(myfile, encoding='utf-8', header=0)
+                            #ID毎のクリック回数を集計
+                            cnt = collections.Counter(data['article_id'].tolist())
+                            #集計値に日付係数をかける
+                            click_cnt.append(collections.Counter(list(cnt.elements()) * int(coefficient)))
+                        elif 'ReviewData' in f:
+                            data = pd.read_csv(myfile, encoding='utf-8', header=0)
+                            #満足度を取得
+                            if len(data) > 0:
+                                review_data.append(data[['article_id','satisfaction']])
 
         #ファイル単位のクリック回数を集計
         click_result = sum((collections.Counter(dict(x)) for x in click_cnt),collections.Counter())
@@ -282,25 +280,30 @@ def make_ranking(user, article, t, x):
 
 #ランキング係数用のデータ生成
 def make_coefficient():
-    # ランキング係数用の最大値、最小値
-    target_date = TODAY + datetime.timedelta(days=-TARGET_DATE_DIFF)
-    dt = datetime.timedelta(days=TARGET_DATE_DIFF)
-    t = [target_date.date() + dt * x for x in range(2)]
-    x = [LATEST_MIN_COEFFICIENT,LATEST_MAX_COEFFICIENT]
 
-    # 補間用の日付データ作成
-    dt_new = dt/TARGET_DATE_DIFF
-    num_new = TARGET_DATE_DIFF + 1
-    t_new = [t[0] + x * dt_new for x in range(num_new)]
-    
-    # 日付をdatetime型からunix時間（float）に変換する
-    t_unix = [dateutil.parser.parse(x.strftime("%Y/%m/%d")).timestamp() for x in t]
-    t_new_unix = [dateutil.parser.parse(x.strftime("%Y/%m/%d")).timestamp() for x in t_new]
-    
-    #線形補間
-    x_new = np.interp(t_new_unix, t_unix, x)
-    
-    return t_new,x_new
+    if TARGET_DATE_DIFF == 0:
+        #一日分の実行の場合は、処理日のレコードのみ返却
+        return [TODAY.date()],[LATEST_MAX_COEFFICIENT]
+    else:
+        # ランキング係数用の最大値、最小値
+        target_date = TODAY + datetime.timedelta(days=-TARGET_DATE_DIFF)
+        dt = datetime.timedelta(days=TARGET_DATE_DIFF)
+        t = [target_date.date() + dt * x for x in range(2)]
+        x = [LATEST_MIN_COEFFICIENT,LATEST_MAX_COEFFICIENT]
+
+        # 補間用の日付データ作成
+        dt_new = dt/TARGET_DATE_DIFF
+        num_new = TARGET_DATE_DIFF + 1
+        t_new = [t[0] + x * dt_new for x in range(num_new)]
+        
+        # 日付をdatetime型からunix時間（float）に変換する
+        t_unix = [dateutil.parser.parse(x.strftime("%Y/%m/%d")).timestamp() for x in t]
+        t_new_unix = [dateutil.parser.parse(x.strftime("%Y/%m/%d")).timestamp() for x in t_new]
+        
+        #線形補間
+        x_new = np.interp(t_new_unix, t_unix, x)
+        
+        return t_new,x_new
 
 #処理結果のSlack通知
 def post_slack(message):
