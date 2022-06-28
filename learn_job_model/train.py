@@ -96,10 +96,6 @@ def input_datalake_master():
             _level = pd.read_csv(io.BytesIO(file_item.get_content()), encoding='utf-8', header=0)
     return _user, _article, _keyword, _role, _skill, _level
 
-#記事詳細データの取り出し
-def get_article(id, content):
-    return content[content["id"] == id]
-
 #ファイル出力
 def output_file(obj):
     for k, v in obj.items():
@@ -140,11 +136,16 @@ def usertovec(user, keyword, role, skill, level, interest_coefficient, weakness_
         #レベル
         user_level = [data.level]
 
-        #ベクトル作成
+        #ベクトル作成（ユーザー特徴量）
+        #ユーザーマスタの興味とキーワードマスタの興味が合致した場合に、ユーザーの特徴量に重みづけを行う
         result = np.where(keyword["title"].isin(user_interest), 1*interest_coefficient, 1)
+        #ユーザーマスタのスキルとスキルマスタのスキルが合致した場合に、ユーザーの特徴量に重みづけを行う
         result = np.append(result,np.where(skill["title"].isin(user_skill1), 1*weakness_coefficient, 1))
+        #ユーザーマスタのロールとロールマスタの役割が合致した場合に、ユーザーの特徴量に重みづけを行う
         result = np.append(result,np.where(role["title"].isin(user_role), 1, 0))
+        #ユーザーマスタの役割に紐づくスキルとスキルマスタのスキルが合致した場合に、ユーザーの特徴量に重みづけを行う
         result = np.append(result,np.where(skill["title"].isin(user_skill2), 1*weakness_coefficient, 1))
+        #ユーザーマスタのレベルとレベルマスタのレベルが合致した場合に、ユーザーの特徴量に重みづけを行う
         result = np.append(result,np.where(level["title"].isin(user_level), 1, 0))
         dict_obj = {'id':data.id, 'vec':result.tolist()}
         user_vec['result'].append(dict_obj)
@@ -160,17 +161,20 @@ def articletovec(article, keyword, role, skill, level, interest_coefficient, wea
         art_skill = [data.skill1, data.skill2, data.skill3]
         #スキルを含む役割
         r = role[(role['skill1'].isin(art_skill))|(role['skill2'].isin(art_skill))|(role['skill3'].isin(art_skill))|(role['skill4'].isin(art_skill))]
-        art_role = []
-        for v in r['title'].values:
-            art_role.append(v)
+        art_role = [v for v in r['title'].values]
         #レベル
         art_level = [data.level]
 
-        #ベクトル作成
+        #ベクトル作成（コンテンツ特徴量）
+        #コンテンツマスタの興味とキーワードマスタの興味が合致した場合に、コンテンツの特徴量に重みづけを行う
         result = np.where(keyword["title"].isin(art_interest), 1, 0)
+        #コンテンツマスタのスキルとスキルマスタのスキルが合致した場合に、コンテンツの特徴量に重みづけを行う
         result = np.append(result,np.where(skill["title"].isin(art_skill), 1, 0))
+        #ユーザーマスタのスキルが必要なロールとロールマスタの役割が合致した場合に、コンテンツの特徴量に重みづけを行う
         result = np.append(result,np.where(role["title"].isin(art_role), 1, 0))
+        #コンテンツマスタのスキルとスキルマスタのスキルが合致した場合に、コンテンツの特徴量に重みづけを行う
         result = np.append(result,np.where(skill["title"].isin(art_skill), 1, 0))
+        #コンテンツマスタのレベルとレベルマスタのレベルが合致した場合に、コンテンツの特徴量に重みづけを行う
         result = np.append(result,np.where(level["title"].isin(art_level), 1, 0))
         dict_obj = {'id':data.id, 'vec':result.tolist()}
         article_vec['result'].append(dict_obj)
@@ -180,11 +184,7 @@ def articletovec(article, keyword, role, skill, level, interest_coefficient, wea
 def calculation_dot(user, article):
     data = []
     for u in user['result']:
-        ret =[]
-        for a in article['result']:
-            v1 = np.array(u['vec'], dtype=float)
-            v2 = np.array(a['vec'], dtype=float)
-            ret.append({'id':a['id'], 'score':np.dot(v1, v2)})
+        ret = [{'id':a['id'], 'score':np.dot(np.array(u['vec'], dtype=float), np.array(a['vec'], dtype=float))} for a in article['result']]
 
         #内積結果による重みづけサンプリング
         ids = [d.get('id') for d in ret]
@@ -197,10 +197,9 @@ def calculation_dot(user, article):
         sample_list = []
         priority = 1
         for sl in s_list:
-            for r in ret:
-                if sl == r['id']:
-                    sample_list.append({'id':r['id'], 'score':r['score'], 'priority':priority})
-                    priority = priority + 1
+            score = [r.get('score') for r in ret if r.get('id') == sl]
+            sample_list.append({'id':sl, 'score':score[0], 'priority':priority})
+            priority += 1
 
         data.append({'personal': { 'id': u['id'] },'articles':sample_list})
 
@@ -253,25 +252,19 @@ def make_ranking(user, article, t, x):
         review_result = review_result.groupby('article_id').mean().to_dict()['satisfaction']
         
         #データの作成
-        result = []
-        for aid in article.id:
-            click_cnt = click_result.get(aid, 0)
-            review_avg = review_result.get(aid, 1.0)
-            result.append({'id': aid, 'score': click_cnt * review_avg })
+        result = [{'id': aid, 'score': click_result.get(aid, 0) * review_result.get(aid, 1.0)} for aid in article.id]
 
         #スコアの降順にソート
-        result = sorted(result, key=lambda x: (-x['score'],x['id']))
+        result = sorted(result, key=lambda x: (-x['score']))
 
         #priority属性の付与
         priority = 1
         for r in result:
             r['priority'] = priority
-            priority = priority + 1
+            priority += 1
         
         #ランキングデータ作成
-        data=[]
-        for uid in user.id:
-            data.append({'personal': { 'id': uid },'articles':result[:OUTPUT_RECORDE_SIZE]})
+        data = [{'personal': { 'id': uid },'articles':result[:OUTPUT_RECORDE_SIZE]} for uid in user.id]
 
         return data
     except Exception as e:
