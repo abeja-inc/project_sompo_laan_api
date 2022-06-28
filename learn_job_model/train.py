@@ -222,26 +222,12 @@ def make_ranking(user, article, t, x):
 
         for i, f in enumerate(files):
             file_item = channel.get_file(f.file_id)
-            upload_day = dateutil.parser.parse(file_item.metadata['timestamp'])
-
-            #zipファイルの解凍
-            with zipfile.ZipFile(io.BytesIO(file_item.get_content())) as myzip:
-                fl = myzip.namelist()
-                idx = t.index(upload_day.date())
-                coefficient = x[idx]
-                for f in fl:
-                    with myzip.open(f) as myfile:
-                        if 'ClickData' in f:
-                            data = pd.read_csv(myfile, encoding='utf-8', header=0)
-                            #ID毎のクリック回数を集計
-                            cnt = collections.Counter(data['article_id'].tolist())
-                            #集計値に日付係数をかける
-                            click_cnt.append(collections.Counter(list(cnt.elements()) * int(coefficient)))
-                        elif 'ReviewData' in f:
-                            data = pd.read_csv(myfile, encoding='utf-8', header=0)
-                            #満足度を取得
-                            if len(data) > 0:
-                                review_data.append(data[['article_id','satisfaction']])
+            #zipファイルを解答し、クリックデータとレビューデータを取得
+            click ,review = load_zip(file_item, t, x)
+            
+            click_cnt.append(click)
+            if len(review) > 0:
+                review_data.append(review)
 
         #ファイル単位のクリック回数を集計
         click_result = sum((collections.Counter(dict(x)) for x in click_cnt),collections.Counter())
@@ -270,6 +256,28 @@ def make_ranking(user, article, t, x):
     except Exception as e:
         post_slack('make_ranking_error'+'\nprocess_id:' + str(TIMESTAMP) + '\nresult:Failure' + '\nerror:' + str(e))
         return []
+
+#zipファイルを読み込んで、クリックデータとレビューデータを取得
+def load_zip(file_item, t, x):
+    upload_day = dateutil.parser.parse(file_item.metadata['timestamp'])
+    #zipファイルの解凍
+    with zipfile.ZipFile(io.BytesIO(file_item.get_content())) as myzip:
+        fl = myzip.namelist()
+        idx = t.index(upload_day.date())
+        coefficient = x[idx]
+        for f in fl:
+            with myzip.open(f) as myfile:
+                if 'ClickData' in f:
+                    data = pd.read_csv(myfile, encoding='utf-8', header=0)
+                    #ID毎のクリック回数を集計
+                    cnt = collections.Counter(data['article_id'].tolist())
+                    #集計値に日付係数をかける
+                    _click = collections.Counter(list(cnt.elements()) * int(coefficient))
+                elif 'ReviewData' in f:
+                    data = pd.read_csv(myfile, encoding='utf-8', header=0)
+                    #満足度を取得
+                    _review = data[['article_id','satisfaction']]
+    return _click, _review
 
 #ランキング係数用のデータ生成
 def make_coefficient():
