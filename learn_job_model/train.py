@@ -1,4 +1,5 @@
 from abeja.datalake import Client as DatalakeClient
+import abeja.datalake as aj
 import pandas as pd
 import numpy as np
 import io
@@ -11,6 +12,7 @@ import dateutil.parser
 import datetime
 import zipfile
 import collections
+from typing import Tuple,Dict,Union
 
 # 出力ディレクトリの作成
 # ABEJA_TRAINING_RESULT_DIRという環境変数に出力先ディレクトリが設定される
@@ -20,8 +22,8 @@ os.makedirs(ABEJA_TRAINING_RESULT_DIR, exist_ok=True)
 #環境変数の取り込み
 INPUT_CHANNEL_ID = os.getenv('INPUT_CHANNEL_ID', 0)
 OUTPUT_CHANNEL_ID = os.getenv('OUTPUT_CHANNEL_ID', 0)
-INTEREST_COEFFICIENT = os.getenv('INTEREST_COEFFICIENT', 1)
-WEAKNESS_COEFFICIENT = os.getenv('WEAKNESS_COEFFICIENT', 1)
+INTEREST_COEFFICIENT = int(os.getenv('INTEREST_COEFFICIENT', 1))
+WEAKNESS_COEFFICIENT = int(os.getenv('WEAKNESS_COEFFICIENT', 1))
 WEB_HOOK_URL = os.getenv('WEB_HOOK_URL', '')
 OUTPUT_RECORDE_SIZE = int(os.getenv('OUTPUT_RECORDE_SIZE', 20))
 ACTIVEDATA_CHANNEL_ID = os.getenv('ACTIVEDATA_CHANNEL_ID', 0)
@@ -48,7 +50,7 @@ def handler(context):
 
         #interestデータ作成
         user_vec = usertovec(df_user, df_keyword, df_role, df_skill, df_level, INTEREST_COEFFICIENT, WEAKNESS_COEFFICIENT)
-        article_vec = articletovec(df_article, df_keyword, df_role, df_skill, df_level, 1, 1)
+        article_vec = articletovec(df_article, df_keyword, df_role, df_skill, df_level)
         #内積処理
         interest = calculation_dot(user_vec, article_vec)
 
@@ -75,7 +77,8 @@ def handler(context):
         raise e
 
 #データレイクからマスタファイルの読み込み
-def input_datalake_master():
+def input_datalake_master() -> Tuple[pd.core.frame.DataFrame, pd.core.frame.DataFrame, pd.core.frame.DataFrame
+                                   , pd.core.frame.DataFrame, pd.core.frame.DataFrame, pd.core.frame.DataFrame]:
     datalake_client = DatalakeClient()
     channel = datalake_client.get_channel(INPUT_CHANNEL_ID)
     files = channel.list_files()
@@ -97,7 +100,7 @@ def input_datalake_master():
     return _user, _article, _keyword, _role, _skill, _level
 
 #ファイル出力
-def output_file(obj):
+def output_file(obj: Dict[str, dict]) -> None:
     for k, v in obj.items():
         metadata = { 'filename': str(TIMESTAMP) + '_' + k + '.json' }
         d  = {'timestamp':TIMESTAMP, 'recommend_type':k, 'result':v}
@@ -105,12 +108,12 @@ def output_file(obj):
         output_dir(k, v)
 
 #ディレクトリへの出力
-def output_dir(recommend_type, obj):
+def output_dir(recommend_type: str, obj: dict) -> None:
     with open(os.path.join(ABEJA_TRAINING_RESULT_DIR, recommend_type + '.json'), 'w') as f:
         json.dump(obj, f, default=expireEncoda, ensure_ascii=False)
 
 #指定のデータレイクチャンネルへのファイル出力
-def output_datalake(object, metadata):
+def output_datalake(object: dict, metadata: dict) -> None:
     datalake_client = DatalakeClient()
     channel = datalake_client.get_channel(OUTPUT_CHANNEL_ID)
     channel.upload(json.dumps(object, default=expireEncoda, ensure_ascii=False).encode("utf-8"), metadata=metadata, content_type='application/json')
@@ -121,7 +124,15 @@ def expireEncoda(object):
         return int(object)
 
 #ユーザーのベクトル化
-def usertovec(user, keyword, role, skill, level, interest_coefficient, weakness_coefficient):
+def usertovec(
+    user: pd.core.frame.DataFrame,
+    keyword: pd.core.frame.DataFrame,
+    role: pd.core.frame.DataFrame,
+    skill: pd.core.frame.DataFrame,
+    level: pd.core.frame.DataFrame,
+    interest_coefficient: Union[int,float],
+    weakness_coefficient: Union[int,float]
+) -> dict:
     user_vec = {'result':[]}
     for data in user.itertuples():
         #興味関心
@@ -152,7 +163,13 @@ def usertovec(user, keyword, role, skill, level, interest_coefficient, weakness_
     return user_vec
 
 #コンテンツのベクトル化
-def articletovec(article, keyword, role, skill, level, interest_coefficient, weakness_coefficient):
+def articletovec(
+    article: pd.core.frame.DataFrame,
+    keyword: pd.core.frame.DataFrame,
+    role: pd.core.frame.DataFrame,
+    skill: pd.core.frame.DataFrame,
+    level: pd.core.frame.DataFrame
+) -> dict:
     article_vec = {'result':[]}
     for data in article.itertuples():
         #興味関心
@@ -160,7 +177,8 @@ def articletovec(article, keyword, role, skill, level, interest_coefficient, wea
         #スキル
         art_skill = [data.skill1, data.skill2, data.skill3]
         #スキルを含む役割
-        r = role[(role['skill1'].isin(art_skill))|(role['skill2'].isin(art_skill))|(role['skill3'].isin(art_skill))|(role['skill4'].isin(art_skill))]
+        conditions = {'skill1': art_skill, 'skill2': art_skill, 'skill3':art_skill, 'skill4':art_skill}
+        r = role.loc[lambda x:(x[conditions.keys()].isin(conditions).any(axis=1))]
         art_role = [v for v in r['title'].values]
         #レベル
         art_level = [data.level]
@@ -181,7 +199,7 @@ def articletovec(article, keyword, role, skill, level, interest_coefficient, wea
     return article_vec
 
 #内積の算出および内積の重み付きランダムサンプリング
-def calculation_dot(user, article):
+def calculation_dot(user: dict, article: dict) -> dict:
     data = []
     for u in user['result']:
         ret = [{'id':a['id'], 'score':np.dot(np.array(u['vec'], dtype=float), np.array(a['vec'], dtype=float))} for a in article['result']]
@@ -206,7 +224,12 @@ def calculation_dot(user, article):
     return data
 
 #ランキングデータの作成
-def make_ranking(user, article, t, x):
+def make_ranking(
+    user: pd.core.frame.DataFrame,
+    article: pd.core.frame.DataFrame,
+    t: list,
+    x: np.ndarray
+) -> dict:
     try:
         #集計用配列
         click_cnt = []
@@ -258,7 +281,12 @@ def make_ranking(user, article, t, x):
         return []
 
 #zipファイルを読み込んで、クリックデータとレビューデータを取得
-def load_zip(file_item, t, x):
+def load_zip(
+    file_item: aj.file.DatalakeFile,
+    t: list,
+    x: np.ndarray
+)  -> Tuple[collections.Counter, pd.core.frame.DataFrame]:
+
     upload_day = dateutil.parser.parse(file_item.metadata['timestamp'])
     #zipファイルの解凍
     with zipfile.ZipFile(io.BytesIO(file_item.get_content())) as myzip:
@@ -280,7 +308,7 @@ def load_zip(file_item, t, x):
     return _click, _review
 
 #ランキング係数用のデータ生成
-def make_coefficient():
+def make_coefficient() -> Tuple[list, np.ndarray]:
 
     if TARGET_DATE_DIFF == 0:
         #一日分の実行の場合は、処理日のレコードのみ返却
@@ -307,7 +335,7 @@ def make_coefficient():
         return t_new,x_new
 
 #処理結果のSlack通知
-def post_slack(message):
+def post_slack(message: str) -> None:
     requests.post(WEB_HOOK_URL, data = json.dumps({
         'text': message,  #通知内容
     }))
