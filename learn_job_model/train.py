@@ -12,6 +12,7 @@ import dateutil.parser
 import datetime
 import zipfile
 import collections
+import random
 from typing import Tuple,Dict,Union
 
 # 出力ディレクトリの作成
@@ -22,7 +23,7 @@ os.makedirs(ABEJA_TRAINING_RESULT_DIR, exist_ok=True)
 #環境変数の取り込み
 INPUT_CHANNEL_ID = os.getenv('INPUT_CHANNEL_ID', 0)
 OUTPUT_CHANNEL_ID = os.getenv('OUTPUT_CHANNEL_ID', 0)
-INTEREST_COEFFICIENT = int(os.getenv('INTEREST_COEFFICIENT', 1))
+INTEREST_COEFFICIENT = int(os.getenv('INTEREST_COEFFICIENT', 40))
 WEAKNESS_COEFFICIENT = int(os.getenv('WEAKNESS_COEFFICIENT', 1))
 WEB_HOOK_URL = os.getenv('WEB_HOOK_URL', '')
 OUTPUT_RECORDE_SIZE = int(os.getenv('OUTPUT_RECORDE_SIZE', 20))
@@ -31,6 +32,7 @@ TARGET_DATE = int(os.getenv('TARGET_DATE', 0))
 TARGET_DATE_DIFF = int(os.getenv('TARGET_DATE_DIFF', 14))
 LATEST_MAX_COEFFICIENT = int(os.getenv('LATEST_MAX_COEFFICIENT', 5))
 LATEST_MIN_COEFFICIENT = int(os.getenv('LATEST_MIN_COEFFICIENT', 1))
+MOVIE_SETTING = os.getenv('MOVIE_SETTING', '1,4')
 
 #処理当日日付を取得(JST)
 t_delta = datetime.timedelta(hours=9)
@@ -46,22 +48,34 @@ def handler(context):
     try:
 
         #マスタファイルの読み込み
-        df_user, df_article, df_keyword, df_role, df_skill, df_level = input_datalake_master()
+        df_user, df_article_all, df_keyword, df_role, df_skill, df_level = input_datalake_master()
+
+        #記事マスタをテキストと動画に分類
+        df_article = df_article_all[df_article_all.original != 'movie']
+        df_movie = df_article_all[df_article_all.original == 'movie']
+
+        #動画設定情報ををintの配列に置換
+        movie_setting = [int(s) for s in MOVIE_SETTING.split(',')]
 
         #interestデータ作成
         user_vec = usertovec(df_user, df_keyword, df_role, df_skill, df_level, INTEREST_COEFFICIENT, WEAKNESS_COEFFICIENT)
         article_vec = articletovec(df_article, df_keyword, df_role, df_skill, df_level)
+        movie_vec = articletovec(df_movie, df_keyword, df_role, df_skill, df_level)
+        #interestスコアの高い動画情報の取得
+        movie_info = get_movie(user_vec, movie_vec, len(movie_setting))
         #内積処理
-        interest = calculation_dot(user_vec, article_vec)
+        interest = calculation_dot(user_vec, article_vec, movie_info, movie_setting)
 
         #weaknessデータ作成
         user_vec = usertovec(df_user, df_keyword, df_role, df_skill, df_level, WEAKNESS_COEFFICIENT, INTEREST_COEFFICIENT)
+        #weaknessスコアの高い動画情報の取得
+        movie_info = get_movie(user_vec, movie_vec, len(movie_setting))
         #内積処理
-        weakness = calculation_dot(user_vec, article_vec)
+        weakness = calculation_dot(user_vec, article_vec, movie_info, movie_setting)
 
         #rankingデータ生成
         ｔ,x = make_coefficient()
-        ranking = make_ranking(df_user, df_article, t, x)
+        ranking = make_ranking(df_user, df_article_all, t, x)
 
         #ファイル出力
         if len(ranking) == 0:
@@ -116,7 +130,7 @@ def output_dir(recommend_type: str, obj: dict) -> None:
 def output_datalake(object: dict, metadata: dict) -> None:
     datalake_client = DatalakeClient()
     channel = datalake_client.get_channel(OUTPUT_CHANNEL_ID)
-    channel.upload(json.dumps(object, default=expireEncoda, ensure_ascii=False).encode("utf-8"), metadata=metadata, content_type='application/json')
+    channel.upload(json.dumps(object, default=expireEncoda, ensure_ascii=False).encode('utf-8'), metadata=metadata, content_type='application/json')
 
 #オブジェクトのエンコード
 def expireEncoda(object):
@@ -149,15 +163,15 @@ def usertovec(
 
         #ベクトル作成（ユーザー特徴量）
         #ユーザーマスタの興味とキーワードマスタの興味が合致した場合に、ユーザーの特徴量に重みづけを行う
-        result = np.where(keyword["title"].isin(user_interest), 1*interest_coefficient, 1)
+        result = np.where(keyword['title'].isin(user_interest), 2*interest_coefficient, 1)
         #ユーザーマスタのスキルとスキルマスタのスキルが合致した場合に、ユーザーの特徴量に重みづけを行う
-        result = np.append(result,np.where(skill["title"].isin(user_skill1), 1*weakness_coefficient, 1))
+        result = np.append(result,np.where(skill['title'].isin(user_skill1), 1*weakness_coefficient, 1))
         #ユーザーマスタのロールとロールマスタの役割が合致した場合に、ユーザーの特徴量に重みづけを行う
-        result = np.append(result,np.where(role["title"].isin(user_role), 1, 0))
+        result = np.append(result,np.where(role['title'].isin(user_role), 1, 0))
         #ユーザーマスタの役割に紐づくスキルとスキルマスタのスキルが合致した場合に、ユーザーの特徴量に重みづけを行う
-        result = np.append(result,np.where(skill["title"].isin(user_skill2), 1*weakness_coefficient, 1))
+        result = np.append(result,np.where(skill['title'].isin(user_skill2), 1*weakness_coefficient, 1))
         #ユーザーマスタのレベルとレベルマスタのレベルが合致した場合に、ユーザーの特徴量に重みづけを行う
-        result = np.append(result,np.where(level["title"].isin(user_level), 1, 0))
+        result = np.append(result,np.where(level['title'].isin(user_level), 1, 0))
         dict_obj = {'id':data.id, 'vec':result.tolist()}
         user_vec['result'].append(dict_obj)
     return user_vec
@@ -185,21 +199,21 @@ def articletovec(
 
         #ベクトル作成（コンテンツ特徴量）
         #コンテンツマスタの興味とキーワードマスタの興味が合致した場合に、コンテンツの特徴量に重みづけを行う
-        result = np.where(keyword["title"].isin(art_interest), 1, 0)
+        result = np.where(keyword['title'].isin(art_interest), 1, 0)
         #コンテンツマスタのスキルとスキルマスタのスキルが合致した場合に、コンテンツの特徴量に重みづけを行う
-        result = np.append(result,np.where(skill["title"].isin(art_skill), 1, 0))
+        result = np.append(result,np.where(skill['title'].isin(art_skill), 1, 0))
         #ユーザーマスタのスキルが必要なロールとロールマスタの役割が合致した場合に、コンテンツの特徴量に重みづけを行う
-        result = np.append(result,np.where(role["title"].isin(art_role), 1, 0))
+        result = np.append(result,np.where(role['title'].isin(art_role), 1, 0))
         #コンテンツマスタのスキルとスキルマスタのスキルが合致した場合に、コンテンツの特徴量に重みづけを行う
-        result = np.append(result,np.where(skill["title"].isin(art_skill), 1, 0))
+        result = np.append(result,np.where(skill['title'].isin(art_skill), 1, 0))
         #コンテンツマスタのレベルとレベルマスタのレベルが合致した場合に、コンテンツの特徴量に重みづけを行う
-        result = np.append(result,np.where(level["title"].isin(art_level), 1, 0))
+        result = np.append(result,np.where(level['title'].isin(art_level), 1, 0))
         dict_obj = {'id':data.id, 'vec':result.tolist()}
         article_vec['result'].append(dict_obj)
     return article_vec
 
 #内積の算出および内積の重み付きランダムサンプリング
-def calculation_dot(user: dict, article: dict) -> dict:
+def calculation_dot(user: dict, article: dict, movie: dict, movie_stting: list) -> dict:
     data = []
     for u in user['result']:
         ret = [{'id':a['id'], 'score':np.dot(np.array(u['vec'], dtype=float), np.array(a['vec'], dtype=float))} for a in article['result']]
@@ -211,6 +225,19 @@ def calculation_dot(user: dict, article: dict) -> dict:
         s = np.random.choice(ids, size=OUTPUT_RECORDE_SIZE, p=np.array(scores/sum(scores)), replace=False)
         s_list = s.tolist()
 
+        #動画コンテンツの設定
+        #ユーザーに該当する動画情報の取得
+        movie_list = list(filter(lambda x : x['uid'] == u['id'], movie))
+        movie_list = movie_list[0]
+        #設定順位に動画コンテンツの設定
+        idx = 0
+        for m_idx in movie_stting:
+            if len(movie_list['movie']) > idx:
+                s_list.insert(m_idx-1, movie_list['movie'][idx]['id'])
+                idx += 1
+
+        ret = ret + movie_list['movie']
+
         #重みづけサンプリング後の並べ替え
         sample_list = []
         priority = 1
@@ -219,7 +246,23 @@ def calculation_dot(user: dict, article: dict) -> dict:
             sample_list.append({'id':sl, 'score':score[0], 'priority':priority})
             priority += 1
 
-        data.append({'personal': { 'id': u['id'] },'articles':sample_list})
+        data.append({'personal': { 'id': u['id'] },'articles':sample_list[:OUTPUT_RECORDE_SIZE]})
+
+    return data
+
+#スコアの高い動画コンテンツの抽出
+def get_movie(user: dict, movie: dict, add_size:int) -> dict:
+    data = []
+    for u in user['result']:
+
+        ret =[{'id':a['id'], 'score':np.dot(np.array(u['vec'], dtype=float), np.array(a['vec'], dtype=float))} for a in movie['result']]
+
+        #scoreが係数以上（マッチしている動画）を取り出し、設定値分だけランダムで抽出
+        ret = list(filter(lambda x : x['score'] > INTEREST_COEFFICIENT , ret))
+        size = min(add_size, len(ret))
+        ret = random.sample(ret, size)
+
+        data.append({'uid': u['id'] ,'movie':ret})
 
     return data
 
@@ -257,9 +300,12 @@ def make_ranking(
         click_result = dict(click_result)
 
         #ファイル単位の満足度を結合し、IDごとの満足度の平均を集計
-        review_result = pd.concat(review_data)
-        review_result = review_result.groupby('article_id').mean().to_dict()['satisfaction']
-        
+        if len(review_data) > 0:
+            review_result = pd.concat(review_data)
+            review_result = review_result.groupby('article_id').mean().to_dict()['satisfaction']
+        else:
+            review_result = {}
+
         #データの作成
         result = [{'id': aid, 'score': click_result.get(aid, 0) * review_result.get(aid, 1.0)} for aid in article.id]
 
@@ -326,8 +372,8 @@ def make_coefficient() -> Tuple[list, np.ndarray]:
         t_new = [t[0] + x * dt_new for x in range(num_new)]
         
         # 日付をdatetime型からunix時間（float）に変換する
-        t_unix = [dateutil.parser.parse(x.strftime("%Y/%m/%d")).timestamp() for x in t]
-        t_new_unix = [dateutil.parser.parse(x.strftime("%Y/%m/%d")).timestamp() for x in t_new]
+        t_unix = [dateutil.parser.parse(x.strftime('%Y/%m/%d')).timestamp() for x in t]
+        t_new_unix = [dateutil.parser.parse(x.strftime('%Y/%m/%d')).timestamp() for x in t_new]
         
         #線形補間
         x_new = np.interp(t_new_unix, t_unix, x)
