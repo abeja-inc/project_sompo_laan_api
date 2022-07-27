@@ -24,7 +24,7 @@ os.makedirs(ABEJA_TRAINING_RESULT_DIR, exist_ok=True)
 INPUT_CHANNEL_ID = os.getenv('INPUT_CHANNEL_ID', 0)
 OUTPUT_CHANNEL_ID = os.getenv('OUTPUT_CHANNEL_ID', 0)
 INTEREST_COEFFICIENT = int(os.getenv('INTEREST_COEFFICIENT', 40))
-WEAKNESS_COEFFICIENT = int(os.getenv('WEAKNESS_COEFFICIENT', 1))
+WEAKNESS_COEFFICIENT = int(os.getenv('WEAKNESS_COEFFICIENT', 2))
 WEB_HOOK_URL = os.getenv('WEB_HOOK_URL', '')
 OUTPUT_RECORDE_SIZE = int(os.getenv('OUTPUT_RECORDE_SIZE', 20))
 ACTIVEDATA_CHANNEL_ID = os.getenv('ACTIVEDATA_CHANNEL_ID', 0)
@@ -58,7 +58,7 @@ def handler(context):
         movie_setting = [int(s) for s in MOVIE_SETTING.split(',')]
 
         #interestデータ作成
-        user_vec = usertovec(df_user, df_keyword, df_role, df_skill, df_level, INTEREST_COEFFICIENT, WEAKNESS_COEFFICIENT)
+        user_vec = usertovec(df_user, df_keyword, df_role, df_skill, df_level, INTEREST_COEFFICIENT*2, WEAKNESS_COEFFICIENT)
         article_vec = articletovec(df_article, df_keyword, df_role, df_skill, df_level)
         movie_vec = articletovec(df_movie, df_keyword, df_role, df_skill, df_level)
         #interestスコアの高い動画情報の取得
@@ -74,7 +74,7 @@ def handler(context):
         weakness = calculation_dot(user_vec, article_vec, movie_info, movie_setting)
 
         #rankingデータ生成
-        ｔ,x = make_coefficient()
+        t,x = make_coefficient()
         ranking = make_ranking(df_user, df_article_all, t, x)
 
         #ファイル出力
@@ -163,13 +163,13 @@ def usertovec(
 
         #ベクトル作成（ユーザー特徴量）
         #ユーザーマスタの興味とキーワードマスタの興味が合致した場合に、ユーザーの特徴量に重みづけを行う
-        result = np.where(keyword['title'].isin(user_interest), 2*interest_coefficient, 1)
+        result = np.where(keyword['title'].isin(user_interest), interest_coefficient, 1)
         #ユーザーマスタのスキルとスキルマスタのスキルが合致した場合に、ユーザーの特徴量に重みづけを行う
-        result = np.append(result,np.where(skill['title'].isin(user_skill1), 1*weakness_coefficient, 1))
+        result = np.append(result,np.where(skill['title'].isin(user_skill1), weakness_coefficient, 1))
         #ユーザーマスタのロールとロールマスタの役割が合致した場合に、ユーザーの特徴量に重みづけを行う
         result = np.append(result,np.where(role['title'].isin(user_role), 1, 0))
         #ユーザーマスタの役割に紐づくスキルとスキルマスタのスキルが合致した場合に、ユーザーの特徴量に重みづけを行う
-        result = np.append(result,np.where(skill['title'].isin(user_skill2), 1*weakness_coefficient, 1))
+        result = np.append(result,np.where(skill['title'].isin(user_skill2), weakness_coefficient, 0))
         #ユーザーマスタのレベルとレベルマスタのレベルが合致した場合に、ユーザーの特徴量に重みづけを行う
         result = np.append(result,np.where(level['title'].isin(user_level), 1, 0))
         dict_obj = {'id':data.id, 'vec':result.tolist()}
